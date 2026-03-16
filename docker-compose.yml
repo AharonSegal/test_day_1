@@ -1,3 +1,9 @@
+###############################################################################################################
+###################################+-----------------------------+###############################################
+###################################|      ~  IMAGES   ~          |###############################################
+###################################+-----------------------------+###############################################
+###############################################################################################################
+
 services:
 
 # +--------------------+
@@ -24,12 +30,10 @@ services:
       start_period: 30s
 
 # +--------------------+
-# |    ELASTICSEARCH   |
+# |   ELASTICSEARCH    |
 # +--------------------+
-
-#MAKE THIS SIMPLER IF POSSIBLE AND EXPLAIN 
   elasticsearch:
-    image: elasticsearch:8.19.12 
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     ports:
       - "9200:9200"
     environment:
@@ -52,7 +56,7 @@ services:
 # |      KIBANA        |
 # +--------------------+
   kibana:
-    image: kibana:9.0.2
+    image: docker.elastic.co/kibana/kibana:8.13.0
     ports:
       - "5601:5601"
     environment:
@@ -70,8 +74,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.8.3
     ports:
-      - "9092:9092"
-      - "29092:29092"
+      - "9092:9092"    # internal docker listener — services inside docker use this
+      - "29092:29092"  # external listener — simulator running locally uses this
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -79,8 +83,10 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     restart: unless-stopped
     networks:
       - pipeline_net
@@ -108,9 +114,11 @@ services:
     networks:
       - pipeline_net
 
-#################+-----------------+###############
-#################|    ~ CODE ~     |###############
-#################+-----------------+###############
+###############################################################################################################
+###################################+-----------------------------+###############################################
+###################################|      ~   CODE    ~          |###############################################
+###################################+-----------------------------+###############################################
+###############################################################################################################
 
 # +------------------------+
 # | simulation             |
@@ -118,38 +126,34 @@ services:
   simulation:
     build:
       context: .
-      dockerfile: simulation/Dockerfile
+      dockerfile: 0.simulation/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      KAFKA_TOPIC_OUT: ${KAFKA_TOPIC_OUT}
-      KAFKA_GROUP_ID: consumer_only_group
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
     depends_on:
       kafka:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - signal_pipeline
+      - pipeline_net
 
 # +------------------------+
-# | intel_service         |
+# | intel_service          |
 # +------------------------+
-  intel_service :
+  intel_service:
     build:
       context: .
-      dockerfile: intel_service/Dockerfile
+      dockerfile: 1.intel_service/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      KAFKA_INTEL_TOPIC: intel
+      KAFKA_DLQ_TOPIC: intel_signals_dlq
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: root
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       ES_HOST: http://elasticsearch:9200
-      LOG_INDEX: system-logs
+      LOG_INDEX: intel-logs
     depends_on:
       kafka:
         condition: service_healthy
@@ -159,25 +163,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - signal_pipeline
+      - pipeline_net
 
 # +------------------------+
 # | attack_service         |
 # +------------------------+
-  attack_service :
+  attack_service:
     build:
       context: .
-      dockerfile: attack_service/Dockerfile
+      dockerfile: 2.attack_service/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      KAFKA_ATTACK_TOPIC: attack
+      KAFKA_DLQ_TOPIC: intel_signals_dlq
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: root
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       ES_HOST: http://elasticsearch:9200
-      LOG_INDEX: system-logs
+      LOG_INDEX: intel-logs
     depends_on:
       kafka:
         condition: service_healthy
@@ -187,7 +192,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - signal_pipeline
+      - pipeline_net
 
 # +------------------------+
 # | damage_service         |
@@ -195,17 +200,18 @@ services:
   damage_service:
     build:
       context: .
-      dockerfile: damage_service/Dockerfile
+      dockerfile: 3.dammage_service/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
-      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      KAFKA_DAMAGE_TOPIC: damage
+      KAFKA_DLQ_TOPIC: intel_signals_dlq
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: root
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       ES_HOST: http://elasticsearch:9200
-      LOG_INDEX: system-logs
+      LOG_INDEX: intel-logs
     depends_on:
       kafka:
         condition: service_healthy
@@ -215,12 +221,12 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - signal_pipeline
+      - pipeline_net
 
 volumes:
   mysql_data:
   es_data:
 
 networks:
-  signal_pipeline:
+  pipeline_net:
     driver: bridge
