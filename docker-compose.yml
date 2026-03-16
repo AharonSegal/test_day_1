@@ -1,0 +1,226 @@
+services:
+
+# +--------------------+
+# |       MYSQL        |
+# +--------------------+
+  mysql:
+    image: mysql:8.3
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db_setup/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    restart: unless-stopped
+    networks:
+      - pipeline_net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+# +--------------------+
+# |    ELASTICSEARCH   |
+# +--------------------+
+
+#MAKE THIS SIMPLER IF POSSIBLE AND EXPLAIN 
+  elasticsearch:
+    image: elasticsearch:8.19.12 
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    networks:
+      - pipeline_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+# +--------------------+
+# |      KIBANA        |
+# +--------------------+
+  kibana:
+    image: kibana:9.0.2
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipeline_net
+
+# +--------------------+
+# |       KAFKA        |
+# +--------------------+
+  kafka:
+    image: confluentinc/cp-kafka:7.8.3
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    restart: unless-stopped
+    networks:
+      - pipeline_net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+# +--------------------+
+# |     KAFKA UI       |
+# +--------------------+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipeline_net
+
+#################+-----------------+###############
+#################|    ~ CODE ~     |###############
+#################+-----------------+###############
+
+# +------------------------+
+# | simulation             |
+# +------------------------+
+  simulation:
+    build:
+      context: .
+      dockerfile: simulation/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_OUT: ${KAFKA_TOPIC_OUT}
+      KAFKA_GROUP_ID: consumer_only_group
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - signal_pipeline
+
+# +------------------------+
+# | intel_service         |
+# +------------------------+
+  intel_service :
+    build:
+      context: .
+      dockerfile: intel_service/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      ES_HOST: http://elasticsearch:9200
+      LOG_INDEX: system-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - signal_pipeline
+
+# +------------------------+
+# | attack_service         |
+# +------------------------+
+  attack_service :
+    build:
+      context: .
+      dockerfile: attack_service/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      ES_HOST: http://elasticsearch:9200
+      LOG_INDEX: system-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - signal_pipeline
+
+# +------------------------+
+# | damage_service         |
+# +------------------------+
+  damage_service:
+    build:
+      context: .
+      dockerfile: damage_service/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_IN: ${KAFKA_TOPIC_IN}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      ES_HOST: http://elasticsearch:9200
+      LOG_INDEX: system-logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - signal_pipeline
+
+volumes:
+  mysql_data:
+  es_data:
+
+networks:
+  signal_pipeline:
+    driver: bridge
