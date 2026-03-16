@@ -102,7 +102,7 @@ choice of db - since its all based around the entity
                         last_lat     FLOAT,
                         last_lon     FLOAT,
                         dist_last    FLOAT        DEFAULT 0.0,
-                        attacked     BOOLEAN      DEFAULT FALSE,
+                        attacked     BOOLEAN      DEFAULT FALSE, still not shure???
                         damage_state VARCHAR(50)  DEFAULT NULL
                     )
                 intel table -
@@ -123,7 +123,7 @@ choice of db - since its all based around the entity
                         attack_id   VARCHAR(100) UNIQUE,
                         timestamp   VARCHAR(50),
                         entity_id   VARCHAR(50),
-                        weapon_type VARCHAR(100),
+                        weapon_type VARCHAR(100) DEFAULT NULL ??? i think here aswel,
                         FOREIGN KEY (entity_id) REFERENCES entities(entity_id)
                     )
                 damage table -
@@ -240,13 +240,5 @@ updates the entity table to the level of damage
 damage_state = the str that is in the damage message
 saves the damage message in damage table
 
-look at this plan
-make the srvices a running py script 
-make each a docker file 
-make one requirements in the root 
-make compose int the root 
+moved connections out 
 
-make the shared folder with the connections
-make the validation cusom in each service even though some is duplicate 
-
-make this clear and by the rules 

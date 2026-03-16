@@ -1,13 +1,15 @@
 from confluent_kafka import Consumer
 from connections.logger import log_event
 
+print("in consumer")
+
 class KafkaConsumerClient:
 
     def __init__(self, bootstrap_servers):
         self.consumer = Consumer({
             "bootstrap.servers": bootstrap_servers,
             "auto.offset.reset": "earliest",
-            "group.id": "consumer"
+            "group.id": "attack-service"
         })
         self.log_event = log_event
 
