@@ -6,7 +6,7 @@ COPY 1.intel_service/requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY shared/ ./shared/
+# COPY shared/ ./shared/
 
 COPY 1.intel_service/ ./
 

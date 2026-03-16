@@ -2,8 +2,8 @@ annotated-types==0.7.0
 anyio==4.12.1
 certifi==2026.2.25
 confluent-kafka==2.13.2
-elastic-transport==9.2.1
-elasticsearch==9.3.0
+elastic-transport==8.13.0
+elasticsearch==8.13.0
 idna==3.11
 kafka-python-ng==2.2.3
 mysql-connector-python==9.6.0

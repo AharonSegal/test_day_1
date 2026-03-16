@@ -1,6 +1,6 @@
 import json
 from confluent_kafka import Producer
-from shared.logger import log_event
+from connections.logger import log_event
 
 print("in publisher")
 

@@ -5,7 +5,7 @@ class IntelConfig:
     def __init__(self):
         self.KAFKA_BOOTSTRAP   = os.getenv("KAFKA_BOOTSTRAP",   "localhost:9092")
         self.KAFKA_INTEL_TOPIC = os.getenv("KAFKA_INTEL_TOPIC", "intel")
-        self.KAFKA_DLQ_TOPIC   = os.getenv("KAFKA_DLQ_TOPIC",   "intel_signals_dlq")
+        self.KAFKA_DLQ_TOPIC   = os.getenv("KAFKA_DLQ_TOPIC",   "dlq")
         self.MYSQL_HOST        = os.getenv("MYSQL_HOST",        "127.0.0.1")
         self.MYSQL_PORT        = int(os.getenv("MYSQL_PORT",    "3306"))
         self.MYSQL_USER        = os.getenv("MYSQL_USER",        "root")

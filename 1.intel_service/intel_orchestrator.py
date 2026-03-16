@@ -8,26 +8,25 @@ gives: validated intel records to mysql intel table, entity state updates to ent
 """
 flow:
     1. subscribe to the kafka 'intel' topic and start the consumer loop
-    2. get_raw_message() returns bytes
-    3. try json.loads - fail means broken bytes, send to dlq and continue
-    4. check all 4 required fields 
-    5. if entity_id in entities table
-         - new: priority_level to 99, distance = 0 ! add here to db 
-         - found: damage_state = 'destroyed' nothing
-         - found: not destroyed - use haversine 
-    6. update entity row with new position, timestamp, and distance
-    7. add to intel table
+    2. get_raw_message() returns raw bytes
+    3. parse_message() tries json.loads - failure sends to dlq and continues
+    4. validate all 4 required fields are present - missing field sends to dlq
+    5. look up entity_id in the entities table:
+         - not found:  first sighting - set priority_level = 99, distance = 0, insert entity row
+         - destroyed:  ghost signal - send to dlq
+         - active:     calculate haversine distance from last known position, update entity row
+    6. insert intel signal into intel table
+    7. log success
 """
+print("starting intel service")
 
+import json
 from intel_config import IntelConfig
-from elasticsearch import Elasticsearch
-import shared.logger as logger_module
-from shared.kafka_consumer import KafkaConsumerClient
-from shared.kafka_publisher import KafkaPublisher
-from shared.mysql_connection import MySQLClient
-
+from connections.kafka_consumer import KafkaConsumerClient
+from connections.kafka_publisher import KafkaPublisher
+from connections.mysql_connection import MySQLClient
+from connections.logger import log_event
 from haversine import haversine_km
-from shared.logger import log_event
 
 
 REQUIRED_FIELDS = [
@@ -38,27 +37,21 @@ REQUIRED_FIELDS = [
 
 class IntelOrchestrator:
 
-    def __init__(self, kafka_consumer, dlq_publisher, mysql,intel_topic):
+    def __init__(self, kafka_consumer, dlq_publisher, mysql, intel_topic):
         self.kafka_consumer = kafka_consumer
         self.dlq_publisher  = dlq_publisher
-        self.mysql   = mysql
-        self.intel_topic = intel_topic
+        self.mysql          = mysql
+        self.intel_topic    = intel_topic
 
-    def validate_fields(self, message):
-        # returns name of first missing required field, or None if all present
-        for field in REQUIRED_FIELDS:
-            if field not in message:
-                return field
-        return None
-
-    def send_to_dlq(self, raw_bytes, reason):
-        # packages the original bytes and reason and publishes to dlq
+    # the function that publishes the errors
+    def send_to_dlq(self, raw_bytes, error):
         self.dlq_publisher.publish({
-            "source_topic": "intel",
+            "source_topic": self.dlq_publisher.topic_dlq,
             "raw":          raw_bytes.decode("utf-8", errors="replace"),
-            "reason":       reason
+            "error":        error
         })
-        log_event("ERROR", "intel message rejected", {"reason": reason})
+        log_event("ERROR", "intel message rejected", {"error": error})
+        print("error logged : ", error)
 
     def get_entity(self, entity_id):
         # returns entity row as dict or None if not found
@@ -72,7 +65,7 @@ class IntelOrchestrator:
         return {"entity_id": row[0], "last_lat": row[1], "last_lon": row[2], "damage_state": row[3]}
 
     def insert_entity(self, entity_id, timestamp, lat, lon):
-        # creates entity row on first sighting — dist_last is 0 on creation
+        # creates entity row on first sighting - dist_last is 0 on creation
         self.mysql.execute(
             "INSERT INTO entities (entity_id, time_last, last_lat, last_lon, dist_last) "
             "VALUES (%s, %s, %s, %s, 0.0)",
@@ -105,24 +98,25 @@ class IntelOrchestrator:
         )
 
     def process(self, message):
-        entity_id   = message["entity_id"]
+        print("-- START MESSAGE -> : ",message," <- : END MESSAGE---")
+        entity_id    = message["entity_id"]
         reported_lat = message["reported_lat"]
         reported_lon = message["reported_lon"]
 
         existing = self.get_entity(entity_id)
 
         if existing is None:
-            # first sighting — unknown entity, assign priority 99
+            # first sighting - assign priority 99
             message["priority_level"] = 99
             self.insert_entity(entity_id, message["timestamp"], reported_lat, reported_lon)
             distance_km = 0.0
 
         elif existing["damage_state"] == "destroyed":
-            # ghost signal — target already confirmed destroyed
+            # target already confirmed destroyed
             return f"entity {entity_id} is already destroyed"
 
         else:
-            # known active entity — calculate movement since last sighting
+            # known active entity - calculate movement since last sighting
             distance_km = round(
                 haversine_km(existing["last_lat"], existing["last_lon"], reported_lat, reported_lon),
                 4
@@ -131,27 +125,36 @@ class IntelOrchestrator:
 
         self.insert_intel(message)
         log_event("INFO", "intel signal processed", {
-            "entity_id":    entity_id,
-            "signal_type":  message["signal_type"],
-            "distance_km":  distance_km
+            "entity_id":   entity_id,
+            "signal_type": message["signal_type"],
+            "distance_km": distance_km
         })
         return None
 
     def start(self):
+        print("++++++++ starting the loop ++++++++")
         self.kafka_consumer.subscribe(self.intel_topic)
-        log_event("INFO", "intel_service started")
+        log_event("INFO", "intel_service started, waiting for messages")
 
         while True:
             raw_bytes = self.kafka_consumer.get_raw_message()
 
             # step 1: parse json
-            message, error = parse_message(raw_bytes)
+            error = None  
+            try:
+                message = json.loads(raw_bytes)
+            except Exception:
+                error = "broken json - could not parse message"
             if error:
                 self.send_to_dlq(raw_bytes, error)
                 continue
 
             # step 2: validate required fields
-            missing = self.validate_fields(message)
+            missing = None  
+            for field in REQUIRED_FIELDS:
+                if field not in message:
+                    missing = field
+                    break
             if missing:
                 self.send_to_dlq(raw_bytes, f"missing required field: {missing}")
                 continue
@@ -163,7 +166,7 @@ class IntelOrchestrator:
 
 
 # ------------------------------------------------------------
-# wiring
+# wiring - assembles all components
 # ------------------------------------------------------------
 
 config = IntelConfig()
@@ -184,5 +187,5 @@ mysql = MySQLClient(
     password=config.MYSQL_PASSWORD,
     database=config.MYSQL_DATABASE
 )
-intel_topic = config.KAFKA_INTEL_TOPIC
-orchestrator = IntelOrchestrator(kafka_consumer, dlq_publisher, mysql,intel_topic)
+
+orchestrator = IntelOrchestrator(kafka_consumer, dlq_publisher, mysql, config.KAFKA_INTEL_TOPIC)
